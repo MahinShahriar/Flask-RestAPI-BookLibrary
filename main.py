@@ -1,83 +1,109 @@
-from flask import Flask, request, jsonify, redirect
-from flask_sqlalchemy import SQLAlchemy
+from flask import Flask, request, jsonify
+from flask_httpauth import HTTPBasicAuth
+import sqlite3
 
-app = Flask(__name__, template_folder='tmplate')
+app = Flask(__name__)
+auth = HTTPBasicAuth()
 app.secret_key = "super-secret-key"
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_DATABASE_URI'] = "mysql://root:root@0.0.0.0:3306/Mahin_web"
-db = SQLAlchemy(app)
+  
+def db_connection():
+  conn = None
+  try:
+    conn = sqlite3.connect('books.sqlite3')
+  except sqlite.error as e:
+    print(e)
+  return conn
 
-class Book_list(db.Model):
-    id = db.Column(db.Integer, primary_key = True)
-    name = db.Column(db.String(50), nullable=False)
-    title = db.Column(db.String(200), nullable=False)
-    author = db.Column(db.String(100), nullable=False)
-
-def book_list():
-  all_books = []
-  books = Book_list.query.filter_by().all()
-  if books:
-    for book in books:
-      all_books.append({
-              "id" : book.id,
-              "name" : book.name,
-              "title": book.title,
-              "author": book.author
-            })
-    return all_books
-  else:
+Admin = {"admin" : "1234"} # this data should fetch from database on production.
+@auth.verify_password
+def verify(username, password):
+  if not (username and password):
+    return False
+  try:
+    return Admin.get(username)==password
+  except:
     return False
 
-
-@app.route("/books", methods=["GET","POST"])
+#============= Unprotected ===============
+@app.route("/api/books", methods=["GET"])
 def books():
-  book_l = book_list()
+  conn = db_connection()
+  cursor = conn.cursor()
   if request.method=='GET':
-    if book_l: return jsonify(book_list())
-    else: return  "Nothing Found", 404
-  
+    cursor = conn.execute("SELECT * FROM book")
+    books = [
+      dict(id=row[0],name=row[1], title=row[2], author=row[3]) for row in cursor.fetchall()
+      ]
+    if books:
+      return jsonify(books)
+    else:
+      return jsonify({"message":"No books available in library  !"})
+
+@app.route("/api/books/<int:id>", methods=["GET"])
+def single_book(id):
+  conn = db_connection()
+  cursor = conn.cursor()
+  if request.method=="GET":
+    cursor = conn.execute(f"SELECT * FROM book WHERE id={id}")
+    book = [
+      dict(id=row[0],name=row[1], title=row[2], author=row[3]) for row in cursor.fetchall()
+      ]
+    if book:
+      return jsonify(book)
+    else:
+      return jsonify({"message":f"No books available with id : {id} !"})
+
+#=========== Protected ==============
+@app.route("/api/books/dashboard", methods=["POST"])
+@auth.login_required
+def book_post():
+  conn = db_connection()
+  cursor = conn.cursor()
   if request.method=="POST":
     name   = request.form['name']
     title  = request.form['title']
     author = request.form['author']
-    new_obj = Book_list(name=name,title=title,author=author)
-    db.session.add(new_obj)
-    db.session.commit()
-    return jsonify(book_list()), 201
+    sql = """ INSERT INTO book(name,title,author) VALUES(?, ?, ?) """
+    cursor = cursor.execute(sql, (name,title,author))
+    conn.commit()
+    return jsonify({'message': f'Book: {name} added successfully !'})
 
-@app.route("/books/<int:id>", methods=["GET","PUT","DELETE"])
-def single_book(id):
-  book = Book_list.query.filter_by(id=id).first()
-  if book:
-    if request.method=="GET":
-      return jsonify({
-                "id" : book.id,
-                "name" : book.name,
-                "title": book.title,
-                "author": book.author
-               })
+@app.route("/api/books/dashboard/<int:id>", methods=["PUT","DELETE"])
+@auth.login_required
+def s_book(id):
+  conn = db_connection()
+  cursor = conn.cursor()
+  cursor.execute(f"SELECT EXISTS(SELECT 1 FROM users WHERE id ={id})")
+  result = cursor.fetchone()[0]
+  if result:
     if request.method=="PUT":
-      if request.form['name']: book.name = request.form['name'] 
-      if request.form['title']: book.title = request.form['title'] 
-      if request.form['author']:book.author = request.form['author'] 
-      db.session.commit()    
-      updated_obj = {
-                "id" : id,
-                "name" : book.name,
-                "title": book.title,
-                "author": book.author
-                }
-      return jsonify(updated_obj)
-      
+        if request.form['name']:
+          name = request.form['name']
+          sql = """ UPDATE book SET name=? WHERE id=?"""
+          cursor = cursor.execute(sql, (name,id))
+          conn.commit()
+          
+        if request.form['title']:
+          title = request.form['title']
+          sql = """ UPDATE book SET title=? WHERE id=?"""
+          cursor = cursor.execute(sql, (title,id))
+          conn.commit()
+        
+        if request.form['author']:
+          author = request.form['author']
+          sql = """ UPDATE book SET author=? WHERE id=?"""
+          cursor = cursor.execute(sql, (author,id))
+          conn.commit()
+        return jsonify({'message':'Updated successfully !'})
+        
     if request.method=="DELETE":
-      db.session.delete(book)
-      db.session.commit()
-      return jsonify(book_list())
+      sql = """ DELETE FROM book WHERE id=? """
+      cursor = cursor.execute(sql,(id,))
+      conn.commit()
+      return jsonify({'message': f'Book no :{id} successfully deleted from library !'})
   
   else:
-    return "Book Not Found", 404
+    return jsonify({'message': 'Book not found'}), 404
 
 if __name__ == '__main__':
-    with app.app_context():
-      db.create_all()
-    app.run(debug= True, port=6969) 
+    app.run(debug= True) 
