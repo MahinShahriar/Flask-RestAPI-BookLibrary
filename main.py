@@ -14,7 +14,7 @@ def db_connection():
     print(e)
   return conn
 
-Admin = {"admin" : "1234"} # this data should fetch from database on production.
+Admin = {"admin" : "1234"} # this data should be fetch from database on production.
 @auth.verify_password
 def verify(username, password):
   if not (username and password):
